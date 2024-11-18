@@ -115,7 +115,7 @@ class ApplyMSWMSAAttention:
         window_args = last_block = last_shift = None
 
         model = model.clone()
-        ms = model.get_model_object("model_sampling")
+        ms = model.model.predictor
 
         start_sigma, end_sigma = convert_time(ms, time_mode, start_time, end_time)
 

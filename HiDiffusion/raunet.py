@@ -3,9 +3,10 @@ import sys
 import logging
 
 import torch
-from ldm_patched.ldm.modules.diffusionmodules import openaimodel
-from ldm_patched.modules.ops import disable_weight_init
-
+#from ldm_patched.ldm.modules.diffusionmodules import openaimodel
+from backend.nn import unet
+#from ldm_patched.modules.ops import disable_weight_init
+from backend.operations import ForgeOperations
 from .utils import *
 
 nn = torch.nn
@@ -35,8 +36,8 @@ class HDConfigClass:
 
 HDCONFIG = HDConfigClass()
 
-ORIG_FORWARD_TIMESTEP_EMBED = openaimodel.forward_timestep_embed
-ORIG_APPLY_CONTROL = openaimodel.apply_control
+ORIG_FORWARD_TIMESTEP_EMBED = unet.TimestepEmbedSequential.forward #openaimodel.forward_timestep_embed
+ORIG_APPLY_CONTROL = unet.apply_control#openaimodel.apply_control
 
 PATCHED_FREEU = False
 
@@ -91,10 +92,12 @@ def hd_apply_control(h, control, name):
 
 def try_patch_apply_control():
     global ORIG_APPLY_CONTROL  # noqa: PLW0603
-    if openaimodel.apply_control is hd_apply_control or NO_CONTROLNET_WORKAROUND:
+    #if openaimodel.apply_control is hd_apply_control or NO_CONTROLNET_WORKAROUND:
+    if unet.apply_control is hd_apply_control or NO_CONTROLNET_WORKAROUND:
         return
-    ORIG_APPLY_CONTROL = openaimodel.apply_control
-    openaimodel.apply_control = hd_apply_control
+    ORIG_APPLY_CONTROL = unet.apply_control #openaimodel.apply_control
+    #openaimodel.apply_control = hd_apply_control
+    unet.apply_control = hd_apply_control
 
 
 class NotFound:
@@ -122,7 +125,7 @@ def hd_forward_timestep_embed(ts, x, emb, *args: list, **kwargs: dict):
     return x
 
 
-OrigUpsample, OrigDownsample = openaimodel.Upsample, openaimodel.Downsample
+OrigUpsample, OrigDownsample = unet.Upsample, unet.Downsample#openaimodel.Upsample, openaimodel.Downsample
 
 
 class HDUpsample(OrigUpsample):
@@ -152,18 +155,19 @@ class HDUpsample(OrigUpsample):
 
 class HDDownsample(OrigDownsample):
     COPY_OP_KEYS = (
-        "ldm_patched_cast_weights",
-        "weight_function",
-        "bias_function",
+        #"ldm_patched_cast_weights",
+        #"weight_function",
+        #"bias_function",
         "weight",
         "bias",
     )
 
-    def __init__(self, *args: list, dtype=None, device=None, **kwargs: dict):
-        super().__init__(*args, dtype=dtype, device=device, **kwargs)
-        self.dtype = dtype
-        self.device = device
-        self.ops = kwargs.get("operations", disable_weight_init)
+    #def __init__(self, *args: list, dtype=None, device=None, **kwargs: dict):
+    #    super().__init__(*args, dtype=dtype, device=device, **kwargs)
+
+    def __init__(self, *args: list,  device=None, **kwargs: dict):
+        super().__init__(*args,  **kwargs)
+        self.ops = kwargs.get("operations", ForgeOperations)
 
     def forward(self, x, transformer_options=None):
         if (
@@ -172,7 +176,8 @@ class HDDownsample(OrigDownsample):
             or not HDCONFIG.check(transformer_options)
         ):
             return super().forward(x)
-        tempop = self.ops.conv_nd(
+        #tempop = self.ops.conv_nd(
+        tempop = unet.conv_nd(
             self.dims,
             self.channels,
             self.out_channels,
@@ -180,17 +185,20 @@ class HDDownsample(OrigDownsample):
             stride=(4, 4),
             padding=(2, 2),
             dilation=(2, 2),
-            dtype=self.dtype,
-            device=self.device,
+            #dtype=self.dtype,
+            #device=self.device,
         )
+        #print(dir(tempop))
         for k in self.COPY_OP_KEYS:
             setattr(tempop, k, getattr(self.op, k))
         return tempop(x)
 
 
 # Necessary to monkeypatch the built in blocks before any models are loaded.
-openaimodel.Upsample = HDUpsample
-openaimodel.Downsample = HDDownsample
+#openaimodel.Upsample = HDUpsample
+#openaimodel.Downsample = HDDownsample
+unet.Upsample = HDUpsample
+unet.Downsample = HDDownsample
 
 
 class ApplyRAUNet:
@@ -252,17 +260,21 @@ class ApplyRAUNet:
         if not enabled:
             HDCONFIG.enabled = False
             if ORIG_FORWARD_TIMESTEP_EMBED is not None:
-                openaimodel.forward_timestep_embed = ORIG_FORWARD_TIMESTEP_EMBED
+                #openaimodel.forward_timestep_embed = ORIG_FORWARD_TIMESTEP_EMBED
+                unet.TimestepEmbedSequential.forward = ORIG_FORWARD_TIMESTEP_EMBED
             if (
-                openaimodel.apply_control is not ORIG_APPLY_CONTROL
+                #openaimodel.apply_control is not ORIG_APPLY_CONTROL
+                unet.apply_control is not ORIG_APPLY_CONTROL
                 and not NO_CONTROLNET_WORKAROUND
             ):
-                openaimodel.apply_control = ORIG_APPLY_CONTROL
+                #openaimodel.apply_control = ORIG_APPLY_CONTROL
+                unet.apply_control = ORIG_APPLY_CONTROL
             return (model,)
 
         # Access model_sampling through the actual model object
-        ms = model.get_model_object("model_sampling")
-
+        
+        #ms = unet. #model.get_model_object("model_sampling")
+        ms = model.model.predictor
         HDCONFIG.start_sigma, HDCONFIG.end_sigma = convert_time(
             ms,
             time_mode,
@@ -310,10 +322,13 @@ class ApplyRAUNet:
         HDCONFIG.two_stage_upscale = not skip_two_stage_upscale
         HDCONFIG.upscale_mode = upscale_mode
         HDCONFIG.enabled = True
-        if openaimodel.forward_timestep_embed is not hd_forward_timestep_embed:
+        #if openaimodel.forward_timestep_embed is not hd_forward_timestep_embed:
+        if unet.TimestepEmbedSequential.forward is not hd_forward_timestep_embed:
             try_patch_freeu_advanced()
-            ORIG_FORWARD_TIMESTEP_EMBED = openaimodel.forward_timestep_embed
-            openaimodel.forward_timestep_embed = hd_forward_timestep_embed
+            #ORIG_FORWARD_TIMESTEP_EMBED = openaimodel.forward_timestep_embed
+            ORIG_FORWARD_TIMESTEP_EMBED = unet.TimestepEmbedSequential.forward
+            #openaimodel.forward_timestep_embed = hd_forward_timestep_embed
+            unet.TimestepEmbedSequential.forward = hd_forward_timestep_embed
         try_patch_apply_control()
         return (model,)
 

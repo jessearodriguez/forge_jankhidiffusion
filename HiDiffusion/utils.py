@@ -1,8 +1,8 @@
 import importlib
 
 import torch.nn.functional as torchf
-from ldm_patched.modules.utils import bislerp
-
+#from ldm_patched.modules.utils import bislerp
+from backend.misc.image_resize import bislerp
 UPSCALE_METHODS = ("bicubic", "bislerp", "bilinear", "nearest-exact", "area")
 
 
